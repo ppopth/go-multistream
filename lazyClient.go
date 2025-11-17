@@ -17,6 +17,17 @@ func NewMSSelect[T StringLike](c io.ReadWriteCloser, proto T) LazyConn {
 	}
 }
 
+func NewMSSelect2[T StringLike](c io.ReadWriteCloser, proto T, peerProtos []T) LazyConn {
+	// TODO: put peerProtos into lazyClientConn so that it knows what protocols the other peer supports
+	return &lazyClientConn[T]{
+		protos: []T{ProtocolID, proto},
+		con:    c,
+
+		rhandshakeOnce: newOnce(),
+		whandshakeOnce: newOnce(),
+	}
+}
+
 // NewMultistream returns a multistream for the given protocol. This will not
 // perform any protocol selection. If you are using a MultistreamMuxer, use
 // NewMSSelect.
