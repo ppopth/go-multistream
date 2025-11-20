@@ -32,6 +32,8 @@ func (at *abbrevTree[T]) Abbreviate(pid T) []byte {
 		if current.children[b] != nil {
 			result = append(result, b)
 			current = current.children[b]
+		} else {
+			break
 		}
 	}
 
@@ -39,6 +41,23 @@ func (at *abbrevTree[T]) Abbreviate(pid T) []byte {
 		return result
 	}
 	return nil
+}
+
+func (at *abbrevTree[T]) GetProtocolID(prefix []byte) (T, error) {
+	if at.root == nil {
+		return "", ErrUnknownPrefix
+	}
+	current := at.root
+	for _, b := range prefix {
+		if current.children[b] == nil {
+			return "", ErrUnknownPrefix
+		}
+		current = current.children[b]
+	}
+	if current.p == nil {
+		return "", ErrUnknownPrefix
+	}
+	return current.p.protocolID, nil
 }
 
 func (at *abbrevTree[T]) AddProtocol(pid T) {

@@ -5,6 +5,7 @@ package multistream
 
 import (
 	"bufio"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,9 @@ import (
 
 // ErrTooLarge is an error to signal that an incoming message was too large
 var ErrTooLarge = errors.New("incoming message was too large")
+
+// ErrUnknownPrefix is an error to signal that the protocol hash prefix is unknown
+var ErrUnknownPrefix = errors.New("unknown protocol hash prefix")
 
 // ProtocolID identifies the multistream protocol itself and makes sure
 // the multistream muxers on both sides of a channel can work with each other.
@@ -55,6 +59,7 @@ type Handler[T StringLike] struct {
 type MultistreamMuxer[T StringLike] struct {
 	handlerlock sync.RWMutex
 	handlers    []Handler[T]
+	abbrevTree  abbrevTree[T]
 }
 
 // NewMultistreamMuxer creates a muxer.
@@ -137,6 +142,7 @@ func (msm *MultistreamMuxer[T]) AddHandlerWithFunc(protocol T, match func(T) boo
 	msm.handlerlock.Lock()
 	defer msm.handlerlock.Unlock()
 
+	msm.abbrevTree.AddProtocol(protocol)
 	msm.removeHandler(protocol)
 	msm.handlers = append(msm.handlers, Handler[T]{
 		MatchFunc: match,
@@ -150,6 +156,7 @@ func (msm *MultistreamMuxer[T]) RemoveHandler(protocol T) {
 	msm.handlerlock.Lock()
 	defer msm.handlerlock.Unlock()
 
+	msm.abbrevTree.RemoveProtocol(protocol)
 	msm.removeHandler(protocol)
 }
 
@@ -178,6 +185,24 @@ func (msm *MultistreamMuxer[T]) Protocols() []T {
 // ErrIncorrectVersion is an error reported when the muxer protocol negotiation
 // fails because of a ProtocolID mismatch.
 var ErrIncorrectVersion = errors.New("client connected with incorrect version")
+
+func (msm *MultistreamMuxer[T]) decodeProtocol(s T) (T, error) {
+	msm.handlerlock.RLock()
+	defer msm.handlerlock.RUnlock()
+
+	bytes, err := hex.DecodeString(string(s))
+	// TODO: decide whether to compare strings or use abbrevTree by looking at
+	// multistream version instead.
+	if err != nil {
+		return s, nil
+	}
+
+	proto, err := msm.abbrevTree.GetProtocolID(bytes)
+	if err != nil {
+		return "", err
+	}
+	return proto, nil
+}
 
 func (msm *MultistreamMuxer[T]) findHandler(proto T) *Handler[T] {
 	msm.handlerlock.RLock()
@@ -225,7 +250,12 @@ loop:
 			return "", nil, err
 		}
 
-		h := msm.findHandler(tok)
+		p, err := msm.decodeProtocol(tok)
+		if err != nil {
+			return "", nil, err
+		}
+
+		h := msm.findHandler(p)
 		if h == nil {
 			if err := delimWriteBuffered(rwc, []byte("na")); err != nil {
 				return "", nil, err
@@ -239,7 +269,7 @@ loop:
 		_ = delimWriteBuffered(rwc, []byte(tok))
 
 		// hand off processing to the sub-protocol handler
-		return tok, h.Handle, nil
+		return p, h.Handle, nil
 	}
 
 }
