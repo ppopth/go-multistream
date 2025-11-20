@@ -1,6 +1,7 @@
 package multistream
 
 import (
+	"encoding/hex"
 	"fmt"
 	"io"
 )
@@ -18,9 +19,15 @@ func NewMSSelect[T StringLike](c io.ReadWriteCloser, proto T) LazyConn {
 }
 
 func NewMSSelect2[T StringLike](c io.ReadWriteCloser, proto T, peerProtos []T) LazyConn {
-	// TODO: put peerProtos into lazyClientConn so that it knows what protocols the other peer supports
+	t := &abbrevTree[T]{}
+	for _, p := range peerProtos {
+		t.AddProtocol(p)
+	}
+
+	// TODO: use a proper varint instead of a hex string later
+	abbrv := T(hex.EncodeToString(t.Abbreviate(proto)))
 	return &lazyClientConn[T]{
-		protos: []T{ProtocolID, proto},
+		protos: []T{ProtocolID, abbrv},
 		con:    c,
 
 		rhandshakeOnce: newOnce(),

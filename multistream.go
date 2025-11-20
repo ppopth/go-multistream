@@ -22,6 +22,9 @@ var ErrTooLarge = errors.New("incoming message was too large")
 // the multistream muxers on both sides of a channel can work with each other.
 const ProtocolID = "/multistream/1.0.0"
 
+// Multistream-select version that protocol abbreviation is supported
+const AbbrevSupportedMSSVersion = 2
+
 var writerPool = sync.Pool{
 	New: func() interface{} {
 		return bufio.NewWriter(nil)
