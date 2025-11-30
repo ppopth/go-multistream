@@ -5,7 +5,7 @@ package multistream
 
 import (
 	"bufio"
-	"encoding/hex"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +25,9 @@ var ErrUnknownPrefix = errors.New("unknown protocol hash prefix")
 // ProtocolID identifies the multistream protocol itself and makes sure
 // the multistream muxers on both sides of a channel can work with each other.
 const ProtocolID = "/multistream/1.0.0"
+
+// ProtocolID identifies the multistream protocol abbreviation support
+var ProtocolAbbrev = []byte{0xff, 0x11}
 
 // Multistream-select version that protocol abbreviation is supported
 const AbbrevSupportedMSSVersion = 2
@@ -186,24 +189,6 @@ func (msm *MultistreamMuxer[T]) Protocols() []T {
 // fails because of a ProtocolID mismatch.
 var ErrIncorrectVersion = errors.New("client connected with incorrect version")
 
-func (msm *MultistreamMuxer[T]) decodeProtocol(s T) (T, error) {
-	msm.handlerlock.RLock()
-	defer msm.handlerlock.RUnlock()
-
-	bytes, err := hex.DecodeString(string(s))
-	// TODO: decide whether to compare strings or use abbrevTree by looking at
-	// multistream version instead.
-	if err != nil {
-		return s, nil
-	}
-
-	proto, err := msm.abbrevTree.GetProtocolID(bytes)
-	if err != nil {
-		return "", err
-	}
-	return proto, nil
-}
-
 func (msm *MultistreamMuxer[T]) findHandler(proto T) *Handler[T] {
 	msm.handlerlock.RLock()
 	defer msm.handlerlock.RUnlock()
@@ -227,17 +212,21 @@ func (msm *MultistreamMuxer[T]) Negotiate(rwc io.ReadWriteCloser) (proto T, hand
 		}
 	}()
 
-	// Send the multistream protocol ID
-	// Ignore the error here.  We want the handshake to finish, even if the
-	// other side has closed this rwc for writing. They may have sent us a
-	// message and closed. Future writers will get an error anyways.
-	_ = delimWriteBuffered(rwc, []byte(ProtocolID))
-	line, err := ReadNextToken[T](rwc)
+	token, err := ReadNextTokenBytes(rwc)
 	if err != nil {
 		return "", nil, err
 	}
-
-	if line != ProtocolID {
+	supportAbbrev := false
+	// Send the multistream protocol ID or the mulstream protocol abbreviation
+	// Ignore the error here.  We want the handshake to finish, even if the
+	// other side has closed this rwc for writing. They may have sent us a
+	// message and closed. Future writers will get an error anyways.
+	if bytes.Equal(token, ProtocolAbbrev) {
+		supportAbbrev = true
+		_ = delimWriteBuffered(rwc, ProtocolAbbrev)
+	} else if T(token) == ProtocolID {
+		_ = delimWriteBuffered(rwc, []byte(ProtocolID))
+	} else {
 		rwc.Close()
 		return "", nil, ErrIncorrectVersion
 	}
@@ -245,17 +234,27 @@ func (msm *MultistreamMuxer[T]) Negotiate(rwc io.ReadWriteCloser) (proto T, hand
 loop:
 	for {
 		// Now read and respond to commands until they send a valid protocol id
-		tok, err := ReadNextToken[T](rwc)
+		var proto T
+
+		tok, err := ReadNextTokenBytes(rwc)
 		if err != nil {
 			return "", nil, err
 		}
 
-		p, err := msm.decodeProtocol(tok)
-		if err != nil {
-			return "", nil, err
+		if supportAbbrev {
+			// decode the protocol abbreviation using the abbreviation tree
+			msm.handlerlock.RLock()
+			proto, err = msm.abbrevTree.GetProtocolID(tok)
+			msm.handlerlock.RUnlock()
+
+			if err != nil {
+				return "", nil, err
+			}
+		} else {
+			proto = T(tok)
 		}
 
-		h := msm.findHandler(p)
+		h := msm.findHandler(proto)
 		if h == nil {
 			if err := delimWriteBuffered(rwc, []byte("na")); err != nil {
 				return "", nil, err
@@ -266,10 +265,10 @@ loop:
 		// Ignore the error here.  We want the handshake to finish, even if the
 		// other side has closed this rwc for writing. They may have sent us a
 		// message and closed. Future writers will get an error anyways.
-		_ = delimWriteBuffered(rwc, []byte(tok))
+		_ = delimWriteBuffered(rwc, tok)
 
 		// hand off processing to the sub-protocol handler
-		return p, h.Handle, nil
+		return proto, h.Handle, nil
 	}
 
 }
