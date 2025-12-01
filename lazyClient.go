@@ -24,11 +24,10 @@ func NewMSSelect2[T StringLike](c io.ReadWriteCloser, proto T, peerProtos []T) L
 		t.AddProtocol(p)
 	}
 
-	abbrv := t.Abbreviate(proto)
 	return &lazyClientConn[T]{
 		protos: []protoInfo[T]{
 			{ID: ProtocolID, Abbrev: ProtocolAbbrev},
-			{ID: proto, Abbrev: abbrv},
+			{ID: proto},
 		},
 		con: c,
 
